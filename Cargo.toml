@@ -1,0 +1,9 @@
+[package]
+name    = "tproxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio   = { version = "1.15.0", features = ["full"] }
+clap    = { version = "3.0.12", features = ["derive"] }
+futures = "0.3.19"
