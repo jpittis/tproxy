@@ -3,12 +3,12 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use clap::Parser;
 use futures::FutureExt;
 use tokio::io::copy;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-
-use clap::Parser;
+use warp::Filter;
 
 /// A simple TCP proxy
 #[derive(Parser, Clone, Debug)]
@@ -21,13 +21,27 @@ struct Args {
     /// Address to forward to
     #[clap(short, long)]
     upstream_addr: String,
+
+    /// Address to forward to
+    #[clap(short, long, default_value = "127.0.0.1:2222")]
+    debug_addr: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let html = include_str!("static/index.html");
     let args = Args::parse();
     let state = Arc::new(Mutex::new(State::new()));
-    listen(args, state).await
+    tokio::spawn(listen(args.clone(), state).map(|r| {
+        if let Err(err) = r {
+            println!("failed to listen; error={}", err);
+        }
+    }));
+    let route = warp::any().map(|| warp::reply::html(html.to_string()));
+    warp::serve(route)
+        .run(args.debug_addr.parse::<SocketAddr>().unwrap())
+        .await;
+    Ok(())
 }
 
 #[derive(PartialEq, Debug)]
@@ -51,18 +65,19 @@ async fn listen(args: Args, state: Arc<Mutex<State>>) -> Result<(), Box<dyn Erro
     let listener = TcpListener::bind(&args.listen_addr).await?;
 
     while let Ok((downstream, downstream_addr)) = listener.accept().await {
-        let forward = forward(
-            downstream,
-            args.upstream_addr.clone(),
-            state.clone(),
-            downstream_addr,
-        )
-        .map(|r| {
-            if let Err(err) = r {
-                println!("failed to forward; error={}", err);
-            }
-        });
-        tokio::spawn(forward);
+        tokio::spawn(
+            forward(
+                downstream,
+                args.upstream_addr.clone(),
+                state.clone(),
+                downstream_addr,
+            )
+            .map(|r| {
+                if let Err(err) = r {
+                    println!("failed to forward; error={}", err);
+                }
+            }),
+        );
     }
 
     Ok(())
@@ -111,6 +126,7 @@ mod tests {
         let args = Args {
             listen_addr: "127.0.0.1:3333".to_string(),
             upstream_addr: "127.0.0.1:4444".to_string(),
+            debug_addr: "127.0.0.1:2222".to_string(),
         };
 
         let state = Arc::new(Mutex::new(State::new()));
